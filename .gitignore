@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+data/train/
+data/test/
+data/labeled_anomalies.csv
+generate_swat.py
