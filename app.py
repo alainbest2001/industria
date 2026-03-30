@@ -82,6 +82,15 @@ h3 { font-family:'IBM Plex Mono',monospace !important; color:#4A7090 !important;
     letter-spacing:4px; text-transform:uppercase; border-bottom:1px solid #1A2535;
     padding-bottom:6px; margin:20px 0 12px; }
 hr { border-color:#1A2535 !important; }
+.pipeline-box { background:#060A12; border:1px solid #1A2535; padding:20px 24px; margin:12px 0; font-family:"IBM Plex Mono",monospace; }
+.pipeline-step { display:flex; align-items:flex-start; gap:16px; padding:8px 0; border-bottom:1px solid #0D1420; }
+.pipeline-step:last-child { border-bottom:none; }
+.step-num { color:#1A3550; font-size:11px; min-width:24px; padding-top:2px; }
+.step-active .step-num { color:#00D4FF; }
+.step-title { color:#4A7090; font-size:11px; letter-spacing:1px; min-width:180px; }
+.step-active .step-title { color:#F0F6FF; }
+.step-desc { color:#1A3550; font-size:11px; line-height:1.6; flex:1; }
+.step-active .step-desc { color:#8BA0BC; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -171,6 +180,105 @@ st.markdown("---")
 if "results" not in st.session_state:
     st.session_state.results = []
 
+
+SG_EXPLAIN = """
+<div class="pipeline-box">
+  <div style="font-size:10px;color:#1A3550;letter-spacing:3px;margin-bottom:12px;">
+    SENSORGUARD · LSTM AUTOENCODER PIPELINE
+  </div>
+  <div class="pipeline-step {s0}">
+    <span class="step-num">01</span>
+    <span class="step-title">DATA LOADING</span>
+    <span class="step-desc">Loading NASA {dataset} channel {channel} — {n_pts:,} timesteps, labeled anomalies from ground truth.</span>
+  </div>
+  <div class="pipeline-step {s1}">
+    <span class="step-num">02</span>
+    <span class="step-title">NORMALIZATION</span>
+    <span class="step-desc">MinMaxScaler fits on training set only → range [-1,1]. Prevents data leakage from test anomalies.</span>
+  </div>
+  <div class="pipeline-step {s2}">
+    <span class="step-num">03</span>
+    <span class="step-title">LSTM TRAINING · {ep}/{epochs} epochs</span>
+    <span class="step-desc">Encoder compresses {window}-pt windows to latent vector. Decoder reconstructs. Loss = MSE reconstruction error on normal data only.</span>
+  </div>
+  <div class="pipeline-step {s3}">
+    <span class="step-num">04</span>
+    <span class="step-title">THRESHOLD CALIBRATION</span>
+    <span class="step-desc">Scores train set → percentile {thr_pct} → threshold. Anomaly = reconstruction error above this value.</span>
+  </div>
+  <div class="pipeline-step {s4}">
+    <span class="step-num">05</span>
+    <span class="step-title">SCORING & EVALUATION</span>
+    <span class="step-desc">Score test set. Compare predictions to NASA ground truth labels. Compute F1, Precision, Recall, FPR.</span>
+  </div>
+</div>
+"""
+
+IG_EXPLAIN = """
+<div class="pipeline-box">
+  <div style="font-size:10px;color:#1A3550;letter-spacing:3px;margin-bottom:12px;">
+    INFRAGUARD · SWaT WATER TREATMENT · 51 SENSORS
+  </div>
+  <div class="pipeline-step {s0}">
+    <span class="step-num">01</span>
+    <span class="step-title">DATA LOADING</span>
+    <span class="step-desc">SWaT dataset — 6 process stages (raw intake → RO → product water). 50,400 normal + 28,800 test with 15 attack types.</span>
+  </div>
+  <div class="pipeline-step {s1}">
+    <span class="step-num">02</span>
+    <span class="step-title">MULTIVARIATE NORMALIZATION</span>
+    <span class="step-desc">Each of the 51 sensors scaled independently. Physical ranges preserved — flow, level, pH, conductivity, pressure.</span>
+  </div>
+  <div class="pipeline-step {s2}">
+    <span class="step-num">03</span>
+    <span class="step-title">LSTM TRAINING · {ep}/{epochs} epochs</span>
+    <span class="step-desc">Window={window}pts, hidden={hidden}. Learns normal inter-sensor correlations. Attacks break these correlations → high reconstruction error.</span>
+  </div>
+  <div class="pipeline-step {s3}">
+    <span class="step-num">04</span>
+    <span class="step-title">THRESHOLD · percentile {thr_pct}</span>
+    <span class="step-desc">Calibrated on 7 days normal operation. Zero tolerance for false positives in critical infrastructure.</span>
+  </div>
+  <div class="pipeline-step {s4}">
+    <span class="step-num">05</span>
+    <span class="step-title">ATTACK DETECTION</span>
+    <span class="step-desc">Detect false sensor injections, pump shutdowns, valve manipulations, pressure spikes across all 6 processes.</span>
+  </div>
+</div>
+"""
+
+FEM_EXPLAIN = """
+<div class="pipeline-box">
+  <div style="font-size:10px;color:#1A3550;letter-spacing:3px;margin-bottom:12px;">
+    FEM BRIDGE · MODAL ANALYSIS → NOVA-Ω DIAGNOSIS
+  </div>
+  <div class="pipeline-step {s0}">
+    <span class="step-num">01</span>
+    <span class="step-title">SENSOR DATA</span>
+    <span class="step-desc">12 sensors on Norwegian bridge reference (Bergsøysund schema) — accelerometers, strain gauges, temperature, wind. {t_sec}s at 10Hz.</span>
+  </div>
+  <div class="pipeline-step {s1}">
+    <span class="step-num">02</span>
+    <span class="step-title">FFT MODAL EXTRACTION</span>
+    <span class="step-desc">FFT on 7 acceleration channels → peak-picking in [0.05–2.0 Hz] → {n_modes} modal frequencies. Damage shifts frequencies downward.</span>
+  </div>
+  <div class="pipeline-step {s2}">
+    <span class="step-num">03</span>
+    <span class="step-title">STIFFNESS MATRIX K</span>
+    <span class="step-desc">K = M·Ω² from measured frequencies. Physical units: N/m. Tridiagonal coupling between DOFs reflects beam discretization.</span>
+  </div>
+  <div class="pipeline-step {s3}">
+    <span class="step-num">04</span>
+    <span class="step-title">NOVA-Ω DIAGNOSIS</span>
+    <span class="step-desc">Condition number κ, eigenvalue analysis, frequency drop vs nominal. Same diagnostic engine as NOVA-Ω FEM solver convergence tool.</span>
+  </div>
+  <div class="pipeline-step {s4}">
+    <span class="step-num">05</span>
+    <span class="step-title">SEVERITY REPORT</span>
+    <span class="step-desc">NOMINAL / LOW / MEDIUM / HIGH / CRITICAL with cause identification and recommended action for the maintenance engineer.</span>
+  </div>
+</div>
+"""
 # ══════════════════════════════════════════════════════════════════════════════
 # RUN ANALYSIS
 # ══════════════════════════════════════════════════════════════════════════════
@@ -182,19 +290,39 @@ if run_btn:
         with st.spinner(f"Loading channel {channel}…"):
             data = load_channel(channel)
 
+        n_pts = len(data["test"])
+        explain_ph = st.empty()
         prog = st.progress(0, text="Training LSTM Autoencoder…")
         from models.detector import SensorGuardDetector
 
+        def _sg_explain(step, ep=0):
+            steps = ["step-active","","","",""]
+            if step >= 1: steps[0] = "step-active"
+            if step >= 2: steps[1] = "step-active"
+            if step >= 3: steps[2] = "step-active"
+            if step >= 4: steps[3] = "step-active"
+            if step >= 5: steps[4] = "step-active"
+            explain_ph.markdown(SG_EXPLAIN.format(
+                s0=steps[0],s1=steps[1],s2=steps[2],s3=steps[3],s4=steps[4],
+                dataset=dataset, channel=channel, n_pts=n_pts,
+                ep=ep, epochs=epochs, window=window, thr_pct=thr_pct
+            ), unsafe_allow_html=True)
+
+        _sg_explain(1)
         det = SensorGuardDetector(window=window, threshold_pct=thr_pct,
                                    hidden=32, epochs=epochs)
+        _sg_explain(2)
         def cb(ep, loss):
             prog.progress(int(ep/epochs*100), text=f"Epoch {ep}/{epochs} · loss={loss:.6f}")
+            _sg_explain(3, ep)
         det.fit(data["train"], progress_cb=cb)
         prog.empty()
+        _sg_explain(4)
 
-        with st.spinner("Scoring…"):
-            result  = det.predict(data["test"])
-            metrics = det.evaluate(result["predictions"], data["labels"])
+        result  = det.predict(data["test"])
+        metrics = det.evaluate(result["predictions"], data["labels"])
+        _sg_explain(5)
+        explain_ph.empty()
 
         st.session_state.results.append({
             "module": "SensorGuard", "channel": channel, "dataset": dataset,
@@ -205,6 +333,16 @@ if run_btn:
 
     # ── INFRAGUARD ────────────────────────────────────────────────────────────
     elif "InfraGuard" in module:
+        explain_ph2 = st.empty()
+        def _ig_explain(step, ep=0):
+            steps = ["","","","",""]
+            for k in range(step): steps[k] = "step-active"
+            explain_ph2.markdown(IG_EXPLAIN.format(
+                s0=steps[0],s1=steps[1],s2=steps[2],s3=steps[3],s4=steps[4],
+                ep=ep, epochs=epochs, window=window, hidden=48, thr_pct=thr_pct
+            ), unsafe_allow_html=True)
+
+        _ig_explain(1)
         with st.spinner("Loading SWaT data…"):
             df_tr = pd.read_csv("data/swat/train.csv")
             df_te = pd.read_csv("data/swat/test.csv")
@@ -213,18 +351,22 @@ if run_btn:
             train_arr  = df_tr.values
             test_arr   = df_te.drop("label", axis=1).values
 
+        _ig_explain(2)
         prog = st.progress(0, text="Training InfraGuard LSTM…")
         from models.infraguard import InfraGuardDetector
         det = InfraGuardDetector(window=window, epochs=epochs,
                                   threshold_pct=thr_pct, batch_size=256, step=4)
         def cb2(ep, loss):
             prog.progress(int(ep/epochs*100), text=f"Epoch {ep}/{epochs} · loss={loss:.6f}")
+            _ig_explain(3, ep)
         det.fit(train_arr, progress_cb=cb2)
         prog.empty()
+        _ig_explain(4)
 
-        with st.spinner("Scoring 51 sensors…"):
-            result  = det.predict(test_arr)
-            metrics = det.evaluate(result["predictions"], labels_all)
+        result  = det.predict(test_arr)
+        metrics = det.evaluate(result["predictions"], labels_all)
+        _ig_explain(5)
+        explain_ph2.empty()
 
         st.session_state.results.append({
             "module": "InfraGuard", "meta": meta,
@@ -241,13 +383,27 @@ if run_btn:
             extract_modal_params_guided, build_stiffness_matrix,
             diagnose_matrix, BRIDGE_PARAMS)
 
-        with st.spinner("Generating bridge sensor data…"):
-            data_br, t_arr = generate_bridge_data(t_sec, damage, seed=42)
-            modal  = extract_modal_params_guided(data_br, freq_range=(0.05, 2.0))
-            K      = build_stiffness_matrix(modal, n_dof=n_modes)
-            diag   = diagnose_matrix(K,
-                         BRIDGE_PARAMS["freq_nominal"][:n_modes],
-                         modal["frequencies_hz"][:n_modes])
+        explain_ph3 = st.empty()
+        def _fem_explain(step):
+            steps = ["","","","",""]
+            for k in range(step): steps[k] = "step-active"
+            explain_ph3.markdown(FEM_EXPLAIN.format(
+                s0=steps[0],s1=steps[1],s2=steps[2],s3=steps[3],s4=steps[4],
+                t_sec=t_sec, n_modes=n_modes
+            ), unsafe_allow_html=True)
+
+        _fem_explain(1)
+        data_br, t_arr = generate_bridge_data(t_sec, damage, seed=42)
+        _fem_explain(2)
+        modal  = extract_modal_params_guided(data_br, freq_range=(0.05, 2.0))
+        _fem_explain(3)
+        K      = build_stiffness_matrix(modal, n_dof=n_modes)
+        _fem_explain(4)
+        diag   = diagnose_matrix(K,
+                     BRIDGE_PARAMS["freq_nominal"][:n_modes],
+                     modal["frequencies_hz"][:n_modes])
+        _fem_explain(5)
+        explain_ph3.empty()
 
         st.session_state.results.append({
             "module": "FEMBridge", "damage": damage,
