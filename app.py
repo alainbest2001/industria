@@ -516,10 +516,10 @@ else:
             colorbar=dict(tickfont=dict(family="IBM Plex Mono",size=9,color="#8BA0BC")),
             hovertemplate="K[%{y},%{x}] = %{z:.2e}<extra></extra>",
         ))
-        fig3.update_layout(**PLOTLY_THEME,height=380,
-            title=dict(text=f"Stiffness matrix K ({n}×{n} DOF) — from measured modal data",
-                       font=dict(family="IBM Plex Mono",size=12,color="#8BA0BC")),
-            xaxis=dict(title="DOF"),yaxis=dict(title="DOF"))
+        fig3.update_layout(**PLOTLY_THEME, height=380,
+            title=dict(text=f"Stiffness matrix K ({n}\u00d7{n} DOF) — from measured modal data"))
+        fig3.update_xaxes(title_text="DOF")
+        fig3.update_yaxes(title_text="DOF")
         st.plotly_chart(fig3,width="stretch")
 
         ca,cb_ = st.columns(2)
