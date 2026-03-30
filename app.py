@@ -106,11 +106,11 @@ with st.sidebar:
     st.markdown("---")
 
     st.markdown("### MODULE")
-    module = st.selectbox("", [
+    module = st.selectbox("Module", [
         "⬡  SensorGuard — Process Sensors",
         "⬡  InfraGuard — Water Infrastructure",
         "⬡  FEM Bridge — Structural Health",
-    ], label_visibility="collapsed")
+    ])
 
     st.markdown("---")
     st.markdown("### PARAMETERS")
@@ -140,7 +140,7 @@ with st.sidebar:
         n_modes  = st.slider("Modes to extract", 4, 6, 6)
 
     st.markdown("---")
-    run_btn = st.button("▶  RUN ANALYSIS", use_container_width=True)
+    run_btn = st.button("▶  RUN ANALYSIS", width="stretch")
 
     st.markdown("""
 <div style='font-family:"IBM Plex Mono",monospace;font-size:9px;color:#1A3550;
@@ -323,7 +323,7 @@ if item["module"] == "SensorGuard":
             legend=dict(bgcolor="#060A12",bordercolor="#1A2535",borderwidth=1))
         fig.update_yaxes(gridcolor="#111827")
         fig.update_xaxes(gridcolor="#111827")
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
     with tab2:
         labels_t = d["labels"][:T]
@@ -340,7 +340,7 @@ if item["module"] == "SensorGuard":
         fig2.update_layout(**PLOTLY_THEME, barmode="overlay", height=350,
             title=dict(text="Anomaly score distribution",
                        font=dict(family="IBM Plex Mono",size=12,color="#8BA0BC")))
-        st.plotly_chart(fig2, use_container_width=True)
+        st.plotly_chart(fig2, width="stretch")
 
     with tab3:
         ca,cb_ = st.columns(2)
@@ -407,7 +407,7 @@ elif item["module"] == "InfraGuard":
         fig.update_layout(**PLOTLY_THEME, height=440,
             legend=dict(bgcolor="#060A12",bordercolor="#1A2535",borderwidth=1),
             yaxis2=dict(gridcolor="#111827"))
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
     with tab2:
         n_show = 6
@@ -423,9 +423,8 @@ elif item["module"] == "InfraGuard":
                 line=dict(color=pal[i],width=0.8), name=sname), row=i+1,col=1)
             fig3.update_yaxes(gridcolor="#111827",row=i+1,col=1)
             fig3.update_xaxes(gridcolor="#111827",row=i+1,col=1)
-        fig3.update_layout(**PLOTLY_THEME, height=120*n_show,
-                           font=dict(size=9))
-        st.plotly_chart(fig3, use_container_width=True)
+        fig3.update_layout(**PLOTLY_THEME, height=120*n_show)
+        st.plotly_chart(fig3, width="stretch")
 
     with tab3:
         ca, cb_ = st.columns(2)
@@ -483,7 +482,7 @@ else:
             fig.update_xaxes(gridcolor="#111827",row=row,col=1)
         fig.update_xaxes(title_text="Time (s)",row=3,col=1)
         fig.update_layout(**PLOTLY_THEME,height=440)
-        st.plotly_chart(fig,use_container_width=True)
+        st.plotly_chart(fig,width="stretch")
 
     with tab2:
         freq_ax = np.array(modal["freq_axis"])
@@ -498,12 +497,12 @@ else:
                 fig2.add_vline(x=f,line=dict(color="#00D4FF",width=1,dash="dot"),
                     annotation_text=f"{f:.3f} Hz",
                     annotation_font=dict(color="#00D4FF",size=9))
-        fig2.update_layout(**PLOTLY_THEME,height=340,
-            xaxis=dict(title="Frequency (Hz)",gridcolor="#111827"),
-            yaxis=dict(title="Amplitude",gridcolor="#111827"),
+        fig2.update_layout(**PLOTLY_THEME, height=340,
             title=dict(text="Modal FFT spectrum — extracted frequencies",
                        font=dict(family="IBM Plex Mono",size=12,color="#8BA0BC")))
-        st.plotly_chart(fig2,use_container_width=True)
+        fig2.update_xaxes(title_text="Frequency (Hz)", gridcolor="#111827")
+        fig2.update_yaxes(title_text="Amplitude", gridcolor="#111827")
+        st.plotly_chart(fig2,width="stretch")
 
         st.markdown("**Identified modal frequencies**")
         cols = st.columns(len(modal["frequencies_hz"]))
@@ -521,7 +520,7 @@ else:
             title=dict(text=f"Stiffness matrix K ({n}×{n} DOF) — from measured modal data",
                        font=dict(family="IBM Plex Mono",size=12,color="#8BA0BC")),
             xaxis=dict(title="DOF"),yaxis=dict(title="DOF"))
-        st.plotly_chart(fig3,use_container_width=True)
+        st.plotly_chart(fig3,width="stretch")
 
         ca,cb_ = st.columns(2)
         with ca:
@@ -530,10 +529,10 @@ else:
             fig_eig = go.Figure(go.Bar(
                 y=eigvals, marker_color=["#FF2020" if v<0 else "#00D4FF" for v in eigvals],
                 name="Eigenvalues"))
-            fig_eig.update_layout(**PLOTLY_THEME,height=220,
-                xaxis=dict(title="Mode",gridcolor="#111827"),
-                yaxis=dict(title="λ",gridcolor="#111827"))
-            st.plotly_chart(fig_eig,use_container_width=True)
+            fig_eig.update_layout(**PLOTLY_THEME, height=220)
+            fig_eig.update_xaxes(title_text="Mode", gridcolor="#111827")
+            fig_eig.update_yaxes(title_text="λ", gridcolor="#111827")
+            st.plotly_chart(fig_eig,width="stretch")
         with cb_:
             st.markdown("**Matrix properties**")
             st.markdown(f"""
@@ -578,10 +577,10 @@ Diag dominant {diag['diag_dominant']}
             y=mea, marker_color="rgba(255,107,53,0.6)",
             marker_line=dict(color="#FF6B35",width=1)))
         fig5.update_layout(**PLOTLY_THEME, barmode="group", height=280,
-            xaxis=dict(gridcolor="#111827"),
-            yaxis=dict(title="Frequency (Hz)",gridcolor="#111827"),
             legend=dict(bgcolor="#060A12",bordercolor="#1A2535"))
-        st.plotly_chart(fig5, use_container_width=True)
+        fig5.update_xaxes(gridcolor="#111827")
+        fig5.update_yaxes(title_text="Frequency (Hz)", gridcolor="#111827")
+        st.plotly_chart(fig5, width="stretch")
 
 # ── History ───────────────────────────────────────────────────────────────────
 if len(st.session_state.results) > 1:
