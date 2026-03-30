@@ -1,20 +1,9 @@
 """
 models/detector.py — SensorGuard AI v3
-Architecture : LSTM Autoencoder seq2seq
-Raison : mémoire temporelle réelle pour anomalies contextuelles longues.
-
-Principe :
-  1. Encoder LSTM  : compresse la séquence en vecteur latent
-  2. Decoder LSTM  : reconstruit la séquence depuis le vecteur latent
-  3. Score         : erreur de reconstruction MSE sur chaque fenêtre
-  4. Seuil         : percentile sur scores du train set (données normales)
-
-Garanties validées théoriquement :
-  - Anomalies courtes (<200pts) : F1 > 0.70
-  - Anomalies longues (>200pts) : F1 > 0.60
-  - Entraînement CPU : < 3 min pour 8500 points
+LSTM Autoencoder Seq2Seq — GPU-accelerated
+Détecte CUDA automatiquement, fallback CPU transparent.
+Compatible Streamlit Cloud (CPU) et station RTX (GPU).
 """
-
 import numpy as np
 import torch
 import torch.nn as nn
@@ -22,89 +11,67 @@ from torch.utils.data import DataLoader, TensorDataset
 from sklearn.preprocessing import MinMaxScaler
 import warnings
 warnings.filterwarnings("ignore")
-
 torch.manual_seed(42)
 
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# ── 1. Normalisation ──────────────────────────────────────────────────────────
+
+# ── Architecture LSTM Autoencoder ─────────────────────────────────────────────
+
+class LSTMEncoder(nn.Module):
+    def __init__(self, input_dim, hidden, n_layers=1):
+        super().__init__()
+        self.lstm = nn.LSTM(input_dim, hidden, n_layers,
+                            batch_first=True, dropout=0.0)
+    def forward(self, x):
+        _, (h, c) = self.lstm(x)
+        return h, c
+
+
+class LSTMDecoder(nn.Module):
+    def __init__(self, hidden, output_dim, n_layers=1, window=64):
+        super().__init__()
+        self.window = window
+        self.lstm   = nn.LSTM(hidden, hidden, n_layers, batch_first=True)
+        self.linear = nn.Linear(hidden, output_dim)
+    def forward(self, h, c):
+        z = h[-1].unsqueeze(1).repeat(1, self.window, 1)
+        out, _ = self.lstm(z, (h, c))
+        return self.linear(out)
+
+
+class LSTMAutoencoder(nn.Module):
+    def __init__(self, input_dim, hidden=32, n_layers=1, window=64):
+        super().__init__()
+        self.encoder = LSTMEncoder(input_dim, hidden, n_layers)
+        self.decoder = LSTMDecoder(hidden, input_dim, n_layers, window)
+    def forward(self, x):
+        h, c = self.encoder(x)
+        return self.decoder(h, c)
+
+
+# ── Composants pipeline ───────────────────────────────────────────────────────
 
 class PhysicalNormalizer:
     def __init__(self):
         self.scaler = MinMaxScaler((-1, 1))
-
-    def fit(self, train: np.ndarray):
+    def fit(self, train):
         self.scaler.fit(train); return self
-
-    def transform(self, data: np.ndarray) -> np.ndarray:
+    def transform(self, data):
         return self.scaler.transform(data)
-
-    def fit_transform(self, train: np.ndarray) -> np.ndarray:
+    def fit_transform(self, train):
         return self.scaler.fit_transform(train)
 
 
-# ── 2. Fenêtrage glissant ────────────────────────────────────────────────────
-
 def make_windows(data: np.ndarray, window: int, step: int = 1) -> np.ndarray:
-    """(T, D) → (N, window, D)"""
     T, D = data.shape
-    idx = np.arange(0, T - window + 1, step)
-    return np.stack([data[i:i+window] for i in idx])   # (N, W, D)
+    idx  = np.arange(0, T - window + 1, step)
+    return np.stack([data[i:i+window] for i in idx])
 
-
-# ── 3. LSTM Autoencoder ───────────────────────────────────────────────────────
-
-class LSTMEncoder(nn.Module):
-    def __init__(self, input_dim: int, hidden: int, n_layers: int):
-        super().__init__()
-        self.lstm = nn.LSTM(input_dim, hidden, n_layers,
-                            batch_first=True, dropout=0.0)
-
-    def forward(self, x):
-        # x : (B, W, D) → out : (B, W, H), (h, c)
-        out, (h, c) = self.lstm(x)
-        return h, c   # shape (n_layers, B, H)
-
-
-class LSTMDecoder(nn.Module):
-    def __init__(self, hidden: int, output_dim: int, n_layers: int, window: int):
-        super().__init__()
-        self.window = window
-        self.lstm   = nn.LSTM(hidden, hidden, n_layers,
-                              batch_first=True, dropout=0.0)
-        self.linear = nn.Linear(hidden, output_dim)
-
-    def forward(self, h, c):
-        # Répéter le vecteur latent W fois pour forcer la reconstruction complète
-        B = h.shape[1]
-        z = h[-1].unsqueeze(1).repeat(1, self.window, 1)  # (B, W, H)
-        out, _ = self.lstm(z, (h, c))                     # (B, W, H)
-        return self.linear(out)                            # (B, W, D)
-
-
-class LSTMAutoencoder(nn.Module):
-    def __init__(self, input_dim: int, hidden: int = 32,
-                 n_layers: int = 1, window: int = 64):
-        super().__init__()
-        self.encoder = LSTMEncoder(input_dim, hidden, n_layers)
-        self.decoder = LSTMDecoder(hidden, input_dim, n_layers, window)
-
-    def forward(self, x):
-        h, c = self.encoder(x)
-        return self.decoder(h, c)   # (B, W, D)
-
-
-# ── 4. Scorer ─────────────────────────────────────────────────────────────────
 
 class LSTMAnomalyScorer:
-    """
-    Entraîne le LSTM AE sur données normales.
-    Score = MSE de reconstruction par fenêtre, aligné sur les timesteps.
-    """
-
-    def __init__(self, window: int = 64, hidden: int = 32,
-                 n_layers: int = 1, epochs: int = 30,
-                 batch_size: int = 64, lr: float = 1e-3,
-                 step: int = 1):
+    def __init__(self, window=64, hidden=32, n_layers=1, epochs=30,
+                 batch_size=64, lr=1e-3, step=1):
         self.window     = window
         self.hidden     = hidden
         self.n_layers   = n_layers
@@ -114,25 +81,27 @@ class LSTMAnomalyScorer:
         self.step       = step
         self.model      = None
         self._losses    = []
+        self.device     = DEVICE
 
-    def fit(self, train_norm: np.ndarray,
-            progress_cb=None) -> "LSTMAnomalyScorer":
-        """Entraîne sur données normales. progress_cb(epoch, loss) optionnel."""
-        W  = make_windows(train_norm, self.window, self.step)  # (N, W, D)
+    def fit(self, train_norm: np.ndarray, progress_cb=None):
+        W  = make_windows(train_norm, self.window, self.step)
         D  = train_norm.shape[1]
         Xt = torch.tensor(W, dtype=torch.float32)
         loader = DataLoader(TensorDataset(Xt, Xt),
-                            batch_size=self.batch_size, shuffle=True)
+                            batch_size=self.batch_size, shuffle=True,
+                            pin_memory=(self.device.type == "cuda"))
 
-        self.model = LSTMAutoencoder(D, self.hidden, self.n_layers, self.window)
-        opt   = torch.optim.Adam(self.model.parameters(), lr=self.lr)
-        crit  = nn.MSELoss()
+        self.model = LSTMAutoencoder(D, self.hidden, self.n_layers, self.window).to(self.device)
+        opt  = torch.optim.Adam(self.model.parameters(), lr=self.lr)
+        crit = nn.MSELoss()
 
         self.model.train()
         self._losses = []
         for ep in range(self.epochs):
             ep_loss = 0.0
             for xb, yb in loader:
+                xb = xb.to(self.device, non_blocking=True)
+                yb = yb.to(self.device, non_blocking=True)
                 opt.zero_grad()
                 out  = self.model(xb)
                 loss = crit(out, yb)
@@ -143,32 +112,24 @@ class LSTMAnomalyScorer:
             self._losses.append(ep_loss)
             if progress_cb:
                 progress_cb(ep + 1, ep_loss)
-
         return self
 
     def score(self, test_norm: np.ndarray) -> np.ndarray:
-        """
-        Retourne score (T,) normalisé [0,1].
-        Chaque timestep reçoit la moyenne des erreurs de reconstruction
-        de toutes les fenêtres qui le contiennent.
-        """
-        assert self.model is not None, "Appeler fit() avant score()"
-        T, D  = test_norm.shape
-        W_arr = make_windows(test_norm, self.window, 1)  # (N, W, D)
-        Xt    = torch.tensor(W_arr, dtype=torch.float32)
+        T, D   = test_norm.shape
+        W_arr  = make_windows(test_norm, self.window, 1)
+        Xt     = torch.tensor(W_arr, dtype=torch.float32)
+        errors = np.zeros((len(Xt), self.window))
+
+        score_batch = 512 if self.device.type == "cuda" else 256
 
         self.model.eval()
-        errors = np.zeros((len(Xt), self.window))  # erreur par fenêtre×pos
         with torch.no_grad():
-            for i in range(0, len(Xt), 256):
-                batch = Xt[i:i+256]
-                rec   = self.model(batch).numpy()
-                orig  = W_arr[i:i+256]
-                # MSE par timestep dans la fenêtre
-                errors[i:i+256] = ((orig - rec) ** 2).mean(axis=2)
+            for i in range(0, len(Xt), score_batch):
+                batch = Xt[i:i+score_batch].to(self.device, non_blocking=True)
+                rec   = self.model(batch).cpu().numpy()
+                orig  = W_arr[i:i+score_batch]
+                errors[i:i+score_batch] = ((orig - rec) ** 2).mean(axis=2)
 
-        # Accumuler : chaque timestep t reçoit les erreurs
-        # de toutes les fenêtres [t-W+1 .. t] qui le contiennent
         score = np.zeros(T)
         count = np.zeros(T)
         for i, err_row in enumerate(errors):
@@ -179,53 +140,40 @@ class LSTMAnomalyScorer:
 
         count = np.maximum(count, 1)
         raw   = score / count
-
-        # Normalisation [0,1]
         mn, mx = raw.min(), raw.max()
         return (raw - mn) / (mx - mn + 1e-8)
 
 
-# ── 5. Seuillage adaptatif ────────────────────────────────────────────────────
-
 class AdaptiveThreshold:
-    def __init__(self, percentile: float = 95.0):
+    def __init__(self, percentile=95.0):
         self.percentile = percentile
         self.threshold  = None
-
-    def fit(self, train_scores: np.ndarray) -> float:
+    def fit(self, train_scores):
         self.threshold = float(np.percentile(train_scores, self.percentile))
         return self.threshold
-
-    def predict(self, scores: np.ndarray) -> np.ndarray:
+    def predict(self, scores):
         assert self.threshold is not None
         return (scores >= self.threshold).astype(int)
 
 
-# ── 6. Pipeline complet ───────────────────────────────────────────────────────
+# ── Pipeline complet ──────────────────────────────────────────────────────────
 
 class SensorGuardDetector:
     """
-    Pipeline SensorGuard AI v3 :
+    Pipeline SensorGuard AI v3 — GPU-accelerated :
       PhysicalNormalizer → LSTMAutoencoder → AdaptiveThreshold
-
-    Paramètres :
-      window        : taille fenêtre temporelle (défaut 64)
-      threshold_pct : percentile pour le seuil adaptatif (défaut 94)
-      hidden        : dimension cachée LSTM (défaut 32)
-      epochs        : epochs d'entraînement (défaut 30)
+    Entraîne sur GPU si disponible, scoring rapide en batches.
     """
 
-    def __init__(self, window: int = 64, threshold_pct: float = 94.0,
-                 hidden: int = 32, epochs: int = 30):
-        self.normalizer  = PhysicalNormalizer()
-        self.scorer      = LSTMAnomalyScorer(
+    def __init__(self, window=64, threshold_pct=94.0, hidden=32, epochs=30):
+        self.normalizer    = PhysicalNormalizer()
+        self.scorer        = LSTMAnomalyScorer(
             window=window, hidden=hidden, epochs=epochs)
-        self.thresholder = AdaptiveThreshold(percentile=threshold_pct)
+        self.thresholder   = AdaptiveThreshold(percentile=threshold_pct)
         self.threshold_pct = threshold_pct
-        self._fitted     = False
+        self._fitted       = False
 
-    def fit(self, train: np.ndarray,
-            progress_cb=None) -> "SensorGuardDetector":
+    def fit(self, train: np.ndarray, progress_cb=None):
         norm_train   = self.normalizer.fit_transform(train)
         self.scorer.fit(norm_train, progress_cb=progress_cb)
         train_scores = self.scorer.score(norm_train)
@@ -234,30 +182,29 @@ class SensorGuardDetector:
         return self
 
     def predict(self, test: np.ndarray) -> dict:
-        assert self._fitted, "Appeler fit() avant predict()"
+        assert self._fitted, "Call fit() before predict()"
         norm_test   = self.normalizer.transform(test)
         scores      = self.scorer.score(norm_test)
         predictions = self.thresholder.predict(scores)
         return {
-            "scores"     : scores,
+            "scores":      scores,
             "predictions": predictions,
-            "threshold"  : self.thresholder.threshold,
-            "losses"     : self.scorer._losses,
+            "threshold":   self.thresholder.threshold,
+            "losses":      self.scorer._losses,
         }
 
-    def evaluate(self, predictions: np.ndarray,
-                 labels: np.ndarray) -> dict:
-        TP = int(np.sum((predictions==1)&(labels==1)))
-        FP = int(np.sum((predictions==1)&(labels==0)))
-        TN = int(np.sum((predictions==0)&(labels==0)))
-        FN = int(np.sum((predictions==0)&(labels==1)))
+    def evaluate(self, predictions, labels) -> dict:
+        TP = int(np.sum((predictions == 1) & (labels == 1)))
+        FP = int(np.sum((predictions == 1) & (labels == 0)))
+        TN = int(np.sum((predictions == 0) & (labels == 0)))
+        FN = int(np.sum((predictions == 0) & (labels == 1)))
         p  = TP / (TP + FP + 1e-8)
         r  = TP / (TP + FN + 1e-8)
         f1 = 2*p*r / (p + r + 1e-8)
         return {
             "TP": TP, "FP": FP, "TN": TN, "FN": FN,
             "precision": round(p,  4),
-            "recall"   : round(r,  4),
-            "f1"       : round(f1, 4),
-            "fpr"      : round(FP / (FP + TN + 1e-8), 4),
+            "recall":    round(r,  4),
+            "f1":        round(f1, 4),
+            "fpr":       round(FP / (FP + TN + 1e-8), 4),
         }
